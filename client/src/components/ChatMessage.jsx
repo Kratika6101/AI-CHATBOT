@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function ChatMessage({ message }) {
+function ChatMessage({ message }) {
   const isUser = message.role === 'user';
 
   return (
@@ -36,3 +36,11 @@ export default function ChatMessage({ message }) {
     </div>
   );
 }
+
+export default React.memo(ChatMessage, (prev, next) => {
+  return (
+    prev.message.id === next.message.id &&
+    prev.message.content === next.message.content &&
+    prev.message.createdAtFormatted === next.message.createdAtFormatted
+  );
+});

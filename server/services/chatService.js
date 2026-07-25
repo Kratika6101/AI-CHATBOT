@@ -1,4 +1,5 @@
 import { generateWithGemini, generateWithGeminiStream } from '../config/gemini.js';
+import { logger } from '../utils/logger.js';
 
 export async function generateReply({ message, conversationHistory = [] }) {
   if (!message || typeof message !== 'string' || message.trim().length === 0) {
@@ -15,7 +16,7 @@ export async function generateReply({ message, conversationHistory = [] }) {
     const reply = await generateWithGemini({ messages });
     return reply;
   } catch (error) {
-    console.error('[Service] Gemini API error:', {
+    logger.error('Gemini API error', {
       message: error?.message,
       status: error?.status,
       code: error?.code,
@@ -38,7 +39,7 @@ export async function* generateReplyStream({ message, conversationHistory = [] }
   try {
     yield* generateWithGeminiStream({ messages });
   } catch (error) {
-    console.error('[Service] Gemini stream error:', {
+    logger.error('Gemini stream error', {
       message: error?.message,
       status: error?.status,
       code: error?.code,
@@ -48,8 +49,8 @@ export async function* generateReplyStream({ message, conversationHistory = [] }
 }
 
 export function getFallbackReply(error) {
-  console.error('[Service] Returning fallback reply for error:', error?.message);
-  
+  logger.error('Returning fallback reply', { error: error?.message });
+
   if (error?.message?.includes('API key')) {
     return "The AI service is misconfigured. Please contact support.";
   }
@@ -74,6 +75,6 @@ export function getFallbackReply(error) {
   if (error?.status && error.status >= 500) {
     return "The AI service is temporarily unavailable. Please try again shortly.";
   }
-  
+
   return "Sorry, I'm having trouble connecting right now. Please try again later.";
 }

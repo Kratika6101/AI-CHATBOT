@@ -1,3 +1,5 @@
+import { logger } from '../utils/logger.js';
+
 export const notFound = (req, res) => {
   res.status(404).json({ message: `Route ${req.originalUrl} not found` });
 };
@@ -20,9 +22,14 @@ export const errorHandler = (err, req, res, next) => {
       message = err.message;
     }
 
-    console.error(
-      `[Error] ${req.method} ${req.originalUrl} -> ${statusCode}: ${message}`
-    );
+    logger.error('Unhandled error', {
+      requestId: req.id,
+      method: req.method,
+      url: req.originalUrl,
+      statusCode,
+      message,
+      error: err?.message,
+    });
 
     res.status(statusCode).json({
       message,
@@ -31,7 +38,7 @@ export const errorHandler = (err, req, res, next) => {
         : {}),
     });
   } catch (handlerError) {
-    console.error('[ErrorHandler] Critical failure:', handlerError);
+    logger.error('Error handler failure', { error: handlerError?.message });
     res.status(500).json({ message: 'Internal Server Error' });
   }
 };

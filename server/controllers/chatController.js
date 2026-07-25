@@ -1,6 +1,7 @@
 import { generateReply, generateReplyStream } from '../services/chatService.js';
 import { getConversation, getHistory, appendMessage } from '../services/conversationStore.js';
 import { asyncHandler } from '../middleware/validation.js';
+import { logger } from '../utils/logger.js';
 
 export const handleChat = asyncHandler(async (req, res) => {
   const { message, conversationHistory, stream, sessionId } = req.body;
@@ -33,7 +34,11 @@ export const handleChat = asyncHandler(async (req, res) => {
       res.write('data: [DONE]\n\n');
       res.end();
     } catch (streamError) {
-      console.error('[ChatController] Streaming error:', streamError);
+      logger.error('Streaming error', {
+        requestId: req.id,
+        error: streamError?.message,
+        status: streamError?.status,
+      });
       if (!res.headersSent) {
         res.status(streamError?.status || 500).json({
           message: streamError?.message || 'Streaming failed.',
@@ -53,9 +58,18 @@ export const handleChat = asyncHandler(async (req, res) => {
     });
 
     appendMessage(effectiveSessionId, 'assistant', reply);
+    logger.info('Chat reply sent', {
+      requestId: req.id,
+      sessionId: effectiveSessionId,
+      replyLength: reply.length,
+    });
     res.status(200).json({ reply, sessionId: effectiveSessionId });
   } catch (replyError) {
-    console.error('[ChatController] Reply error:', replyError);
+    logger.error('Reply error', {
+      requestId: req.id,
+      error: replyError?.message,
+      status: replyError?.status,
+    });
     throw replyError;
   }
 });

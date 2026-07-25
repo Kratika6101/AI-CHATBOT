@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { logger } from '../utils/logger.js';
 
 let genAIInstance = null;
 
@@ -36,7 +37,7 @@ export async function generateWithGemini({ messages }) {
   }
 
   try {
-    console.log(`[Gemini] Chat model ${modelName} with ${history.length} history items`);
+    logger.info('Gemini chat request', { model: modelName, historyItems: history.length });
 
     const chat = model.startChat({ history });
     const lastUser = messages[messages.length - 1];
@@ -46,14 +47,14 @@ export async function generateWithGemini({ messages }) {
     const text = response.text();
 
     if (!text || text.trim().length === 0) {
-      console.warn('[Gemini] Empty response received');
+      logger.warn('Gemini empty response');
       return 'I received an empty response. Please try again.';
     }
 
-    console.log(`[Gemini] Success. Response length: ${text.length}`);
+    logger.info('Gemini response received', { length: text.length });
     return text.trim();
   } catch (error) {
-    console.error('[Gemini] API call failed:', {
+    logger.error('Gemini API call failed', {
       model: modelName,
       messageCount: history.length,
       error: error?.message,
@@ -80,7 +81,7 @@ export async function* generateWithGeminiStream({ messages }) {
   }
 
   try {
-    console.log(`[Gemini] Streaming chat model ${modelName} with ${history.length} history items`);
+    logger.info('Gemini streaming request', { model: modelName, historyItems: history.length });
     const chat = model.startChat({ history });
     const lastUser = messages[messages.length - 1];
     const userText = lastUser?.content || 'Hello';
@@ -96,11 +97,11 @@ export async function* generateWithGeminiStream({ messages }) {
     }
 
     if (!yielded) {
-      console.warn('[Gemini] Stream yielded no content');
+      logger.warn('Gemini stream yielded no content');
       yield 'I received an empty response. Please try again.';
     }
   } catch (error) {
-    console.error('[Gemini] Stream failed:', {
+    logger.error('Gemini stream failed', {
       model: modelName,
       messageCount: history.length,
       error: error?.message,

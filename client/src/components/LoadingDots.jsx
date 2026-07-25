@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function LoadingDots() {
+function LoadingDots() {
   return (
     <div className="flex items-center gap-1 px-2 py-1" aria-label="Thinking">
       {[0, 1, 2].map((i) => (
@@ -13,3 +13,5 @@ export default function LoadingDots() {
     </div>
   );
 }
+
+export default React.memo(LoadingDots);

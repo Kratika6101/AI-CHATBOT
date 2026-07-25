@@ -1,10 +1,35 @@
+import { logger } from '../utils/logger.js';
+
 const MAX_CONVERSATIONS = 20;
 const MAX_MESSAGES_PER_CONVERSATION = 50;
 const MAX_INPUT_LENGTH = 2000;
 const ESTIMATED_TOKENS_PER_CHAR = 0.25;
 const MAX_TOTAL_TOKENS = 120000;
+const CONVERSATION_TTL_MS = 24 * 60 * 60 * 1000;
+const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 
 const conversations = new Map();
+
+let cleanupInterval = null;
+
+function startCleanup() {
+  if (cleanupInterval) return;
+  cleanupInterval = setInterval(() => {
+    const now = Date.now();
+    const toDelete = [];
+    for (const [id, conv] of conversations) {
+      if (now - new Date(conv.updatedAt).getTime() > CONVERSATION_TTL_MS) {
+        toDelete.push(id);
+      }
+    }
+    for (const id of toDelete) {
+      conversations.delete(id);
+    }
+    if (toDelete.length > 0) {
+      logger.info('Cleaned up expired conversations', { count: toDelete.length });
+    }
+  }, CLEANUP_INTERVAL_MS);
+}
 
 export function getConversation(sessionId) {
   if (!sessionId) {
@@ -20,8 +45,6 @@ export function getConversation(sessionId) {
       tokenCount: 0,
     });
   }
-
-  enforceLimits();
 
   const conv = conversations.get(sessionId);
   conv.updatedAt = new Date().toISOString();
@@ -105,3 +128,5 @@ function trimConversationMessages(conv) {
 
   if (conv.tokenCount < 0) conv.tokenCount = 0;
 }
+
+startCleanup();

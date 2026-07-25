@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { sendMessage, checkHealth } from '../services/chatApi';
-import { generateId } from '../utils/helpers';
+import { generateId, sanitizeText } from '../utils/helpers';
 import { CHAT_STORAGE_KEY } from '../utils/constants';
 import { formatTimestamp } from '../utils/helpers';
 
@@ -16,6 +16,7 @@ const loadConversations = () => {
   }
 };
 
+let persistTimer = null;
 const persistConversations = (conversations) => {
   try {
     localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(conversations));
@@ -31,22 +32,29 @@ export function useChat() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [cooldown, setCooldown] = useState(false);
+
   const abortControllerRef = useRef(null);
-  const conversationsRef = useRef(conversations);
   const isMountedRef = useRef(true);
   const cooldownTimerRef = useRef(null);
+  const sessionIdMapRef = useRef(new Map());
 
   useEffect(() => {
     isMountedRef.current = true;
-    conversationsRef.current = conversations;
     return () => {
       isMountedRef.current = false;
       if (cooldownTimerRef.current) clearTimeout(cooldownTimerRef.current);
+      if (abortControllerRef.current) abortControllerRef.current.abort();
     };
-  }, [conversations]);
+  }, []);
 
   useEffect(() => {
-    persistConversations(conversations);
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => {
+      persistConversations(conversations);
+    }, 100);
+    return () => {
+      if (persistTimer) clearTimeout(persistTimer);
+    };
   }, [conversations]);
 
   const startCooldown = useCallback((ms = 2000) => {
@@ -55,7 +63,10 @@ export function useChat() {
     cooldownTimerRef.current = setTimeout(() => setCooldown(false), ms);
   }, []);
 
-  const activeConversation = conversations.find((c) => c.id === activeId) || null;
+  const activeConversation = useMemo(
+    () => conversations.find((c) => c.id === activeId) || null,
+    [conversations, activeId]
+  );
 
   const newConversation = useCallback(() => {
     if (abortControllerRef.current) {
@@ -88,15 +99,15 @@ export function useChat() {
   const deleteConversation = useCallback((id) => {
     setConversations((prev) => {
       const next = prev.filter((c) => c.id !== id);
-      if (activeId === id) {
-        setActiveId((current) => {
-          const remaining = next;
-          return remaining.length > 0 ? remaining[0].id : null;
-        });
-      }
+      setActiveId((current) => {
+        if (current === id) {
+          return next.length > 0 ? next[0].id : null;
+        }
+        return current;
+      });
       return next;
     });
-  }, [activeId]);
+  }, []);
 
   const updateConversation = useCallback((id, updater) => {
     setConversations((prev) =>
@@ -110,26 +121,30 @@ export function useChat() {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
-    if (activeId) {
-      updateConversation(activeId, { messages: [] });
-    }
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === activeId ? { ...c, messages: [], updatedAt: new Date().toISOString() } : c
+      )
+    );
     setError(null);
     setIsLoading(false);
-  }, [activeId, updateConversation]);
+  }, [activeId]);
 
   const send = useCallback(
     async (content) => {
       if (isLoading || cooldown) return;
 
       let currentId = activeId;
+
       const userMessage = {
         id: generateId(),
         role: 'user',
-        content,
+        content: sanitizeText(content),
         createdAt: new Date().toISOString(),
       };
 
-      const upsertUserMessage = (list) => {
+      setConversations((prev) => {
+        const list = prev;
         if (currentId) {
           const conv = list.find((c) => c.id === currentId);
           const sessionId = conv?.sessionId || null;
@@ -138,10 +153,7 @@ export function useChat() {
               ? {
                   ...c,
                   messages: [...c.messages, userMessage],
-                  title:
-                    c.messages.length === 0
-                      ? content.slice(0, 50) || 'New Chat'
-                      : c.title,
+                  title: c.messages.length === 0 ? userMessage.content.slice(0, 50) || 'New Chat' : c.title,
                   updatedAt: new Date().toISOString(),
                   sessionId,
                 }
@@ -152,7 +164,7 @@ export function useChat() {
         currentId = id;
         const newConversation = {
           id,
-          title: content.slice(0, 50) || 'New Chat',
+          title: userMessage.content.slice(0, 50) || 'New Chat',
           sessionId: null,
           messages: [userMessage],
           createdAt: new Date().toISOString(),
@@ -160,9 +172,8 @@ export function useChat() {
         };
         setActiveId(id);
         return [newConversation, ...list];
-      };
+      });
 
-      setConversations((prev) => upsertUserMessage(prev));
       setError(null);
       setIsLoading(true);
 
@@ -172,8 +183,7 @@ export function useChat() {
       abortControllerRef.current = new AbortController();
 
       try {
-        const currentConv = conversationsRef.current.find((c) => c.id === currentId);
-        const sessionId = currentConv?.sessionId || undefined;
+        const sessionId = sessionIdMapRef.current.get(currentId);
 
         const data = await sendMessage({
           message: content,
@@ -182,6 +192,7 @@ export function useChat() {
         });
 
         if (data.sessionId && currentId) {
+          sessionIdMapRef.current.set(currentId, data.sessionId);
           updateConversation(currentId, { sessionId: data.sessionId });
         }
 
@@ -192,19 +203,17 @@ export function useChat() {
           createdAt: new Date().toISOString(),
         };
 
-        if (isMountedRef.current && currentId) {
-          setConversations((prev) =>
-            prev.map((c) =>
-              c.id === currentId
-                ? {
-                    ...c,
-                    messages: [...c.messages, assistantMessage],
-                    updatedAt: new Date().toISOString(),
-                  }
-                : c
-            )
-          );
-        }
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === currentId
+              ? {
+                  ...c,
+                  messages: [...c.messages, assistantMessage],
+                  updatedAt: new Date().toISOString(),
+                }
+              : c
+          )
+        );
         return assistantMessage;
       } catch (err) {
         const response = err?.response;
@@ -214,14 +223,10 @@ export function useChat() {
         const status = response?.status;
         startCooldown(1000);
         const display = [message, status && `(HTTP ${status})`].filter(Boolean).join(' ');
-        if (isMountedRef.current) {
-          setError(display);
-        }
+        setError(display);
         throw err;
       } finally {
-        if (isMountedRef.current) {
-          setIsLoading(false);
-        }
+        setIsLoading(false);
         abortControllerRef.current = null;
       }
     },
@@ -239,33 +244,45 @@ export function useChat() {
     const trimmed = lastUserMessage.content.trim();
     if (!trimmed) return;
 
-    updateConversation(activeId, {
-      messages: currentConv.messages.filter(
-        (m) => !(m.role === 'assistant' && m.id === currentConv.messages[currentConv.messages.length - 1]?.id)
-      ),
-    });
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === activeId
+          ? {
+              ...c,
+              messages: c.messages.filter(
+                (m) => !(m.role === 'assistant' && m.id === c.messages[c.messages.length - 1]?.id)
+              ),
+            }
+          : c
+      )
+    );
 
     setError(null);
     await send(trimmed);
-  }, [activeId, conversations, send, updateConversation]);
+  }, [activeId, conversations, send]);
 
-  const formattedActive = activeConversation
-    ? {
-        ...activeConversation,
-        messages: activeConversation.messages.map((m) => ({
+  const formattedActive = useMemo(() => {
+    if (!activeConversation) return { id: null, messages: [], title: '' };
+    return {
+      ...activeConversation,
+      messages: activeConversation.messages.map((m) => ({
+        ...m,
+        createdAtFormatted: formatTimestamp(new Date(m.createdAt)),
+      })),
+    };
+  }, [activeConversation]);
+
+  const formattedConversations = useMemo(
+    () =>
+      conversations.map((c) => ({
+        ...c,
+        messages: c.messages.map((m) => ({
           ...m,
           createdAtFormatted: formatTimestamp(new Date(m.createdAt)),
         })),
-      }
-    : { id: null, messages: [], title: '' };
-
-  const formattedConversations = conversations.map((c) => ({
-    ...c,
-    messages: c.messages.map((m) => ({
-      ...m,
-      createdAtFormatted: formatTimestamp(new Date(m.createdAt)),
-    })),
-  }));
+      })),
+    [conversations]
+  );
 
   return {
     conversations: formattedConversations,

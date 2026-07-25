@@ -26,28 +26,35 @@ if (!apiKey) {
   process.exit(1);
 }
 
-const express = await import('express');
-const cors = await import('cors');
-const helmet = await import('helmet');
-const morgan = await import('morgan');
-const { requestTimeout } = await import('./middleware/requestTimeout.js');
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import morgan from 'morgan';
+import { requestTimeout } from './middleware/requestTimeout.js';
+import { requestId } from './middleware/requestId.js';
+import { logger } from './utils/logger.js';
+import chatRoutes from './routes/chatRoutes.js';
+import { errorHandler } from './middleware/errorHandler.js';
+import { notFound } from './middleware/errorHandler.js';
+import { chatLimiter } from './middleware/rateLimiter.js';
 
-const app = express.default();
+const app = express();
 
 const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim())
   : '*';
 
 app.use(
-  cors.default({
+  cors({
     origin: allowedOrigins === '*' ? true : allowedOrigins,
     credentials: true,
   })
 );
-app.use(helmet.default());
-app.use(morgan.default('combined'));
-app.use(express.default.json({ limit: '1mb' }));
+app.use(helmet());
+app.use(morgan('combined'));
+app.use(express.json({ limit: '1mb' }));
 app.use(requestTimeout(Number(process.env.OPENAI_TIMEOUT_MS || 30000)));
+app.use(requestId);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
@@ -63,12 +70,12 @@ app.get('/api/health/gemini', async (req, res) => {
     const duration = Date.now() - start;
     res.json({
       status: 'ok',
-      model: process.env.GEMINI_MODEL || 'gemini-1.5-flash',
+      model: process.env.GEMINI_MODEL || 'gemini-flash-latest',
       reply: reply.substring(0, 100),
       durationMs: duration,
     });
   } catch (error) {
-    console.error('[Health] Gemini check failed:', error);
+    logger.error('Gemini health check failed', { error: error?.message });
     res.status(500).json({
       status: 'error',
       message: error?.message || 'Gemini health check failed',
@@ -76,41 +83,24 @@ app.get('/api/health/gemini', async (req, res) => {
   }
 });
 
-const { chatLimiter } = await import('./middleware/rateLimiter.js');
-const { notFound, errorHandler } = await import('./middleware/errorHandler.js');
-const chatRoutes = await import('./routes/chatRoutes.js');
-
-app.use('/api/chat', chatLimiter, chatRoutes.default || chatRoutes);
+app.use('/api/chat', chatLimiter, chatRoutes);
 
 app.use(notFound);
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, async () => {
-  console.log(`Server running on port ${PORT}`);
-  
-  try {
-    const { generateWithGemini } = await import('./config/gemini.js');
-    const start = Date.now();
-    await generateWithGemini({
-      messages: [{ role: 'user', content: 'Say hi in one short sentence.' }],
-    });
-    const duration = Date.now() - start;
-    console.log(`[Startup] Gemini connectivity verified in ${duration}ms`);
-  } catch (error) {
-    console.error('[Startup] Gemini connectivity check FAILED:', error?.message);
-    console.error('[Startup] Chat will return fallback replies until Gemini is reachable.');
-  }
+const server = app.listen(PORT, () => {
+  logger.info('Server running', { port: PORT, env: process.env.NODE_ENV });
 });
 
 const gracefulShutdown = () => {
-  console.log('Received shutdown signal. Closing server...');
+  logger.info('Received shutdown signal. Closing server...');
   server.close(() => {
-    console.log('Server closed.');
+    logger.info('Server closed.');
     process.exit(0);
   });
   setTimeout(() => {
-    console.error('Forced shutdown due to timeout.');
+    logger.error('Forced shutdown due to timeout.');
     process.exit(1);
   }, 10000);
 };
